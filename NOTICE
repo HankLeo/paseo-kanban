@@ -1,0 +1,13 @@
+This project began as a one-time copy of paseo-fleet-dashboard, adapted to a
+session-granularity kanban board:
+https://github.com/getpaseo/paseo-fleet-dashboard
+Copyright its contributors; licensed under the MIT License included in LICENSE.
+
+The fleet dashboard itself includes an adapted cross-daemon inventory approach
+from paseo-x-comms:
+https://github.com/xpufx/paseo-x-comms
+Copyright its contributors; licensed under the Apache License 2.0.
+
+The original dashboard design derives from agents-dash-list:
+https://github.com/panrafal/paseo-plugins/tree/main/agents-dash-list
+Copyright (c) 2026 panrafal; licensed under the MIT License included in LICENSE.

@@ -32,7 +32,7 @@ import {
 } from "../shared/session-model";
 import { FilterBar } from "./components/filter-bar";
 import { openSessionDetail } from "./navigation-bus";
-import { readAppHostRegistry } from "./web";
+import { kanbanAppInstanceId, readAppHostRegistry } from "./web";
 import { GanttView } from "./views/gantt-view";
 import { ListView } from "./views/list-view";
 import { SwimlaneView } from "./views/swimlane-view";
@@ -88,9 +88,11 @@ export function KanbanSurface({ theme, layout, navigation, host }: PluginSurface
     queryKey: SNAPSHOT_KEY,
     queryFn: async () => {
       // Mirror the app's own host registry first so daemons added in Paseo appear
-      // on the board on the next refresh without any plugin-side setup.
+      // on the board on the next refresh without any plugin-side setup. The app instance
+      // id partitions the mirror: another machine's app syncing into this daemon keeps
+      // the hosts this machine's app mirrored.
       try {
-        await syncHosts({ hosts: readAppHostRegistry(), localServerId: host.id });
+        await syncHosts({ hosts: readAppHostRegistry(), localServerId: host.id, appId: kanbanAppInstanceId() });
       } catch {
         // Host mirroring is best-effort; a failure never blocks the board snapshot.
       }

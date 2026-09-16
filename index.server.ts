@@ -64,9 +64,9 @@ export default function contribute(server: PluginServerContext) {
     return result;
   });
   server.handle(markAgentUnread, ({ agentId }) => markUnread(agentId));
-  server.handle(syncAppHosts, ({ hosts, localServerId }) => {
+  server.handle(syncAppHosts, ({ appId, hosts, localServerId }) => {
     const reservedNames = new Set(readHosts().map(({ name }) => name));
-    const result = writeAppHosts(hosts, { localServerId, reservedNames });
+    const result = writeAppHosts(hosts, { appId, localServerId, reservedNames });
     if (result.changed) invalidateSnapshot();
     return result;
   });

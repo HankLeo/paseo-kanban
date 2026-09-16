@@ -7,9 +7,13 @@
 import { Platform } from "react-native";
 import type { AppHostConnection } from "../shared/contracts";
 
-declare const localStorage: { getItem(key: string): string | null } | undefined;
+declare const localStorage: {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+} | undefined;
 
 const REGISTRY_STORAGE_KEY = "@paseo:daemon-registry";
+const APP_INSTANCE_STORAGE_KEY = "@paseo:kanban:app-instance";
 const MAX_HOSTS = 20;
 
 export interface AppHostSyncEntry {
@@ -76,6 +80,24 @@ function readConnection(profile: Record<string, unknown>): AppHostConnection | n
   }
   const routableTcp = usable.find((connection) => connection.type === "directTcp" && !isLoopbackEndpoint(connection.endpoint));
   return routableTcp ?? usable.find((connection) => connection.type === "relay") ?? usable[0] ?? null;
+}
+
+/**
+ * Stable id for this app instance (per browser profile / desktop renderer storage). The server
+ * partitions the mirrored host registry by this id so two machines' apps mirroring into the same
+ * daemon coexist instead of overwriting each other's hosts.
+ */
+export function kanbanAppInstanceId(): string | undefined {
+  if (Platform.OS !== "web") return undefined;
+  try {
+    const existing = typeof localStorage !== "undefined" ? localStorage.getItem(APP_INSTANCE_STORAGE_KEY) : null;
+    if (existing !== null && /^[A-Za-z0-9_-]{8,64}$/.test(existing)) return existing;
+    const id = `app-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+    if (typeof localStorage !== "undefined") localStorage.setItem(APP_INSTANCE_STORAGE_KEY, id);
+    return id;
+  } catch {
+    return undefined;
+  }
 }
 
 export function readAppHostRegistry(): AppHostSyncEntry[] {

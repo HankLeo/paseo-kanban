@@ -3,7 +3,13 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { appHostConnectionString, readAppHosts, toAppHostRecords, writeAppHosts } from "./app-hosts";
+import {
+  appHostConnectionString,
+  mergeAppHostRecords,
+  readAppHosts,
+  toAppHostRecords,
+  writeAppHosts,
+} from "./app-hosts";
 import { clientTarget } from "./snapshot";
 
 test("synthesizes direct TCP connection strings the inventory parser accepts", () => {
@@ -70,13 +76,86 @@ test("persists the mirror with change detection", async () => {
       connection: { type: "directTcp" as const, endpoint: "a:6767" },
     },
   ];
-  const first = writeFresh(entries, {});
+  const first = writeFresh(entries, { appId: "app-a" });
   assert.deepEqual(first, { synced: 1, changed: true });
-  const second = writeFresh(entries, {});
+  // An identical sync is a no-op: the stored timestamp is reused, not bumped.
+  const second = writeFresh(entries, { appId: "app-a" });
   assert.deepEqual(second, { synced: 1, changed: false });
-  const third = writeFresh([], {});
+  const third = writeFresh([], { appId: "app-a" });
   assert.deepEqual(third, { synced: 0, changed: true });
   assert.deepEqual(readFresh(), []);
+});
+
+test("partitions the mirror per syncing app so apps do not clobber each other", async () => {
+  const home = mkdtempSync(join(tmpdir(), "paseo-kanban-app-hosts-partitions-"));
+  process.env.PASEO_HOME = home;
+  const { writeAppHosts: writeFresh, readAppHosts: readFresh } = await import(
+    `./app-hosts?test=${Date.now()}partitions`
+  );
+  const workHosts = [
+    { serverId: "srv_8c16g", label: "8C16G", connection: { type: "directTcp" as const, endpoint: "8c16g:6767" } },
+    { serverId: "srv_4c8g", label: "4C8G", connection: { type: "directTcp" as const, endpoint: "4c8g:6767" } },
+  ];
+  const homeHosts = [
+    { serverId: "srv_home", label: "home", connection: { type: "directTcp" as const, endpoint: "home:6767" } },
+  ];
+  writeFresh(workHosts, { appId: "work-app" });
+  // The home app syncing an unrelated registry keeps the work app's hosts.
+  writeFresh(homeHosts, { appId: "home-app" });
+  let names = readFresh().map((record: { name: string }) => record.name).sort();
+  assert.deepEqual(names, ["4C8G", "8C16G", "home"]);
+  // Removing a host in one app only drops that app's partition.
+  writeFresh([], { appId: "home-app" });
+  names = readFresh().map((record: { name: string }) => record.name).sort();
+  assert.deepEqual(names, ["4C8G", "8C16G"]);
+});
+
+test("keeps the owning app's mirror of a shared daemon until it stops listing it", () => {
+  const previous = toAppHostRecords(
+    [{ serverId: "srv_x", label: "shared", connection: { type: "directTcp", endpoint: "127.0.0.1:6767" } }],
+    { appId: "app-a", now: "2026-09-16T08:00:00.000Z" },
+  );
+  const incoming = toAppHostRecords(
+    [{ serverId: "srv_x", label: "shared", connection: { type: "relay", relayEndpoint: "relay:443", daemonPublicKeyB64: "pk" } }],
+    { appId: "app-b", now: "2026-09-16T09:00:00.000Z" },
+  );
+  let merged = mergeAppHostRecords(previous, incoming, "app-b", new Set());
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0]?.appId, "app-a");
+  assert.match(merged[0]?.host ?? "", /^tcp:\/\//);
+  // Once the owner drops the daemon, the other app's mirror takes over.
+  merged = mergeAppHostRecords(merged, incoming, "app-a", new Set());
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0]?.appId, "app-b");
+  assert.match(merged[0]?.host ?? "", /^https:\/\/app\.paseo\.sh/);
+});
+
+test("refreshes the stored timestamp only when the mirrored connection changes", () => {
+  const base = { serverId: "srv_a", label: "devbox", connection: { type: "directTcp" as const, endpoint: "a:6767" } };
+  const first = toAppHostRecords([base], { appId: "app-a", now: "2026-09-16T08:00:00.000Z" });
+  const resync = toAppHostRecords([base], { appId: "app-a", now: "2026-09-16T09:00:00.000Z" });
+  let merged = mergeAppHostRecords(first, resync, "app-a", new Set());
+  assert.equal(merged[0]?.syncedAt, "2026-09-16T08:00:00.000Z");
+  const moved = toAppHostRecords(
+    [{ ...base, connection: { type: "directTcp", endpoint: "a-new:6767" } }],
+    { appId: "app-a", now: "2026-09-16T10:00:00.000Z" },
+  );
+  merged = mergeAppHostRecords(merged, moved, "app-a", new Set());
+  assert.equal(merged[0]?.syncedAt, "2026-09-16T10:00:00.000Z");
+});
+
+test("drops pre-partition records on the first partitioned sync", async () => {
+  const home = mkdtempSync(join(tmpdir(), "paseo-kanban-app-hosts-legacy-"));
+  process.env.PASEO_HOME = home;
+  const { writeAppHosts: writeFresh, readAppHosts: readFresh } = await import(
+    `./app-hosts?test=${Date.now()}legacy`
+  );
+  writeFresh([{ serverId: "srv_old", label: "old", connection: { type: "directTcp" as const, endpoint: "old:6767" } }], {});
+  writeFresh([{ serverId: "srv_new", label: "new", connection: { type: "directTcp" as const, endpoint: "new:6767" } }], {
+    appId: "app-a",
+  });
+  const names = readFresh().map((record: { name: string }) => record.name);
+  assert.deepEqual(names, ["new"]);
 });
 
 test("skips entries without a reproducible connection but keeps their local label", async () => {

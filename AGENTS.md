@@ -12,7 +12,7 @@
 
 ```
 paseo-plugin.json          # 插件 manifest；改 paseo 版本要求在这里
-index.client.tsx           # 客户端入口：addSurface/addSidebarItem/addWorkspacePanel/addCommandCenterItem + navigation-bus 绑定
+index.client.tsx           # 客户端入口：addSurface/addSidebarItem/addCommandCenterItem
 index.server.ts            # daemon 侧入口：全部 RPC handler + registerSettings
 shared/                    # 两端共用（纯逻辑，禁止 Node/RN API）
   model.ts                 #   基础纯函数：activity 派生、PR 摘要、时间格式化、provider 图标/标签
@@ -30,10 +30,9 @@ server/                    # daemon 子进程（可用 Node API）
   *.test.ts                #   node:test 单测
 client/                    # app 内运行（仅 React Native API）
   kanban-surface.tsx       #   主 surface：数据装配、过滤、工具栏、视图分发
-  navigation-bus.ts        #   entry 级 emitter，让 surface 能调 client.openPanel
   web.ts                   #   【唯一允许 DOM 全局的文件】读 app host 注册表（localStorage，Platform.OS==="web" 门控）
   views/                   #   swimlane-view / list-view / gantt-view
-  components/              #   session-card / filter-bar / session-detail-panel
+  components/              #   session-card / filter-bar
 ```
 
 ## 硬性约束（违反即构建失败或线上 bug）
@@ -56,15 +55,15 @@ client/                    # app 内运行（仅 React Native API）
 - **未读标记**：插件私有（server 端 marks.json，0600），idle + 有效 mark → 显示 unread；打开会话时自动清除。**paseo 未开放设置原生未读的 API，无法同步到 app 侧边栏绿点**（已确认 `PaseoAgentHandle` 无此方法）。
 - **远程 host 双来源**：手动 `hosts.json`（Add host）+ 自动镜像 `app-hosts.json`（客户端经 `client/web.ts` 读 app 注册表 `@paseo:daemon-registry`，随快照周期同步；镜像**按 app 实例分区**——`client/web.ts` 在 localStorage 生成稳定 `appId`，每次同步只替换自己分区，多台机器的 app 互不覆盖，同一 daemon 由先镜像的 app 持有；仅支持 directTcp/relay，SSH 隧道类 app 专有连接跳过；同名时手动优先；`localServerId` 排除本机）。
 - **多 daemon 装同一插件**：app 0.8 按 `插件id/贡献id` 合并侧边栏贡献为单条目，渲染时优先「当前 host 的实例」（`packages/app/src/plugins/sidebar-items.tsx` 的 `selectTarget`），多实例时面板头部有 host 切换器（会话级记忆）。插件侧无法影响该选择；防冲突手段是镜像分区（见上一条）。
-- **点击行为**：`navigation.openAgent({agentId})` 跳转 reveal 聊天页 + `navigation-bus` 调 `client.openPanel("session-detail", {workspaceId, agentId, location:"explorer"})` 展开侧边栏详情面板；远程 host 降级为 `paseo agent open --server` CLI（需要 host 带 serverId，relay 天然有、directTcp 由 app 镜像注入）。
+- **点击行为**：`navigation.openAgent({agentId})` 跳转 reveal 聊天页；远程 host 降级为 `paseo agent open --server` CLI（需要 host 带 serverId，relay 天然有、directTcp 由 app 镜像注入）。曾有过 explorer 侧边栏 Session detail 面板（addWorkspacePanel/openPanel），因宿主面板守卫依赖「该 host 上插件已安装且 workspace/agent 在 store」、跨 host 无法工作（沙箱 daemon 不装插件时 persisted tab 稳定落在 unavailable），已移除。
 - **视图偏好**：`useSettings(boardPreferences)`（host 作用域持久化），未 ready 时用默认值。
 
 ## 已知平台限制（不要试图"修复"，是 paseo 侧的缺口）
 
-- 插件没有内置侧边栏 reveal API（explorer 侧边栏只列 Files/Changes/PR，不列 agent）→ 用 openPanel explorer 详情面板替代。
+- 插件没有内置侧边栏 reveal API（explorer 侧边栏只列 Files/Changes/PR，不列 agent）。
 - agent/workspace 只有 createdAt/updatedAt/activityAt/statusEnteredAt/attentionTimestamp 等字段，**无历史状态流转记录** → 甘特条是生命期而非状态迁移。
 - 全局 surface 里没有 `PluginClientStateProvider`，`useWorkspace/useAgent` 只在 workspace 面板内可用 → surface 数据走 RPC。
-- app.paseo.sh 托管 web app 构建可能落后于桌面 app：旧构建上插件面板（openPanel）会静默无效，属宿主版本问题，不要在插件侧绕行。
+- app.paseo.sh 托管 web app 构建可能落后于桌面 app，属宿主版本问题，不要在插件侧绕行。
 - iOS/Android 无 localStorage，app host 自动镜像静默关闭（手动 Add host 仍可用）。
 
 ## 开发命令

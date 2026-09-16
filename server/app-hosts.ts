@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { AppHostConnection } from "../shared/contracts";
 import { paseoHome } from "./paseo-home";
@@ -19,10 +19,11 @@ export interface AppHostRecord {
 export interface AppHostSyncInputEntry {
   serverId: string;
   label?: string;
-  connection: AppHostConnection;
+  connection?: AppHostConnection;
 }
 
 const file = join(paseoHome(), "plugin-data", "paseo-kanban", "app-hosts.json");
+const localNameFile = join(paseoHome(), "plugin-data", "paseo-kanban", "local-host.json");
 const MAX_HOSTS = 20;
 
 export function appHostConnectionString(connection: AppHostConnection, serverId: string): string {
@@ -58,6 +59,7 @@ export function toAppHostRecords(
   const records: AppHostRecord[] = [];
   for (const entry of entries.slice(0, MAX_HOSTS)) {
     if (options.localServerId && entry.serverId === options.localServerId) continue;
+    if (!entry.connection) continue;
     let name = sanitizeName(entry.label, entry.serverId);
     if (used.has(name)) {
       const suffix = createHash("sha256").update(entry.serverId).digest("hex").slice(0, 6);
@@ -92,11 +94,52 @@ export function readAppHosts(): AppHostRecord[] {
   }
 }
 
+/** Persist the app-registry label of the local daemon so the board names it like any other host. */
+function writeLocalHostName(entries: readonly AppHostSyncInputEntry[], localServerId: string | undefined): boolean {
+  if (!localServerId) return false;
+  const local = entries.find((entry) => entry.serverId === localServerId);
+  if (!local) {
+    try {
+      rmSync(localNameFile);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  const name = sanitizeName(local.label, local.serverId);
+  const serialized = `${JSON.stringify({ serverId: localServerId, name }, null, 2)}\n`;
+  let previous = "";
+  try {
+    previous = readFileSync(localNameFile, "utf8");
+  } catch {
+    // First sync.
+  }
+  if (previous === serialized) return false;
+  mkdirSync(dirname(localNameFile), { recursive: true, mode: 0o700 });
+  const temp = `${localNameFile}.tmp`;
+  writeFileSync(temp, serialized, { mode: 0o600 });
+  renameSync(temp, localNameFile);
+  return true;
+}
+
+/** The app-registry label of the local daemon, null when no app has mirrored one yet. */
+export function readLocalHostName(): string | null {
+  try {
+    const value: unknown = JSON.parse(readFileSync(localNameFile, "utf8"));
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const record = value as { name?: unknown };
+    return typeof record.name === "string" && record.name.length > 0 ? record.name : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Replace the mirror; returns how many hosts landed and whether the file changed. */
 export function writeAppHosts(
   entries: readonly AppHostSyncInputEntry[],
   options: { localServerId?: string; reservedNames?: ReadonlySet<string> } = {},
 ): { synced: number; changed: boolean } {
+  const localNameChanged = writeLocalHostName(entries, options.localServerId);
   const records = toAppHostRecords(entries, options);
   const serialized = `${JSON.stringify(records, null, 2)}\n`;
   let previous = "";
@@ -105,7 +148,7 @@ export function writeAppHosts(
   } catch {
     // First sync.
   }
-  if (previous === serialized) return { synced: records.length, changed: false };
+  if (previous === serialized) return { synced: records.length, changed: localNameChanged };
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
   const temp = `${file}.tmp`;
   writeFileSync(temp, serialized, { mode: 0o600 });

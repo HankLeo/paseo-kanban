@@ -20,7 +20,7 @@ import {
   shouldUseTlsForDefaultHostedRelay,
 } from "@getpaseo/protocol/daemon-endpoints";
 import { KanbanHostSchema, type KanbanHost } from "../shared/contracts";
-import { findAppHost, readAppHosts } from "./app-hosts";
+import { findAppHost, readAppHosts, readLocalHostName } from "./app-hosts";
 import { readHosts, type KanbanHostConfig } from "./hosts";
 import { paseoHome } from "./paseo-home";
 
@@ -29,7 +29,10 @@ const COLLECTION_TIMEOUT_MS = 12_000;
 const CACHE_MS = 30_000;
 const MAX_PAGES = 50;
 const HOST_CACHE_FILE = join(paseoHome(), "plugin-data", "paseo-kanban", "snapshot.json");
-const LOCAL_HOST_NAME = hostname();
+/** Local display name: the app-registry label when mirrored, else the OS hostname. */
+function localHostName(): string {
+  return readLocalHostName() ?? hostname();
+}
 let generation = 0;
 let cached: { at: number; value: KanbanSnapshot } | null = null;
 let inflight: { generation: number; promise: Promise<KanbanSnapshot> } | null = null;
@@ -192,11 +195,11 @@ async function inspectLocal(paseo: PaseoApi): Promise<KanbanHost> {
   const fingerprint = hostFingerprint();
   try {
     const { agents, workspaces } = await withDeadline(inventory(paseo), "Local inventory");
-    const host = { id: "local", name: LOCAL_HOST_NAME, serverId: null, reachable: true, error: null, agents, workspaces };
+    const host = { id: "local", name: localHostName(), serverId: null, reachable: true, error: null, agents, workspaces };
     lastSuccessful.set(host.id, { fingerprint, host });
     return host;
   } catch (cause) {
-    return failedHost("local", LOCAL_HOST_NAME, cause, undefined, fingerprint);
+    return failedHost("local", localHostName(), cause, undefined, fingerprint);
   }
 }
 

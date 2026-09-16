@@ -15,7 +15,7 @@ const MAX_HOSTS = 20;
 export interface AppHostSyncEntry {
   serverId: string;
   label?: string;
-  connection: AppHostConnection;
+  connection?: AppHostConnection;
 }
 
 function readString(value: unknown, max: number): string | null {
@@ -78,10 +78,11 @@ export function readAppHostRegistry(): AppHostSyncEntry[] {
       const record = profile as Record<string, unknown>;
       const serverId = readString(record.serverId, 200);
       if (!serverId) continue;
-      const connection = readConnection(record);
-      if (!connection) continue;
+      // Entries without a reproducible connection are still forwarded: the server ignores them
+      // for remote inventory but uses the local one for its display name.
+      const connection = readConnection(record) ?? undefined;
       const label = readString(record.label, 200);
-      entries.push({ serverId, ...(label ? { label } : {}), connection });
+      entries.push({ serverId, ...(label ? { label } : {}), ...(connection ? { connection } : {}) });
       if (entries.length >= MAX_HOSTS) break;
     }
     return entries;

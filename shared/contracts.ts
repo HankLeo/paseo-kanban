@@ -126,7 +126,9 @@ export const syncAppHosts = defineRpc({
         z.object({
           serverId: z.string().min(1).max(200),
           label: z.string().max(200).optional(),
-          connection: AppHostConnectionSchema,
+          // Optional so the local profile can sync its label even when the app reaches it
+          // through a connection the plugin cannot reproduce daemon-side.
+          connection: AppHostConnectionSchema.optional(),
         }),
       )
       .max(20),

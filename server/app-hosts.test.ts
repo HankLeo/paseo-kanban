@@ -79,6 +79,36 @@ test("persists the mirror with change detection", async () => {
   assert.deepEqual(readFresh(), []);
 });
 
+test("skips entries without a reproducible connection but keeps their local label", async () => {
+  const home = mkdtempSync(join(tmpdir(), "paseo-kanban-local-name-"));
+  process.env.PASEO_HOME = home;
+  const { writeAppHosts: writeFresh, readLocalHostName: readName } = await import(
+    `./app-hosts?test=${Date.now()}local`
+  );
+  const result = writeFresh(
+    [
+      { serverId: "srv_local", label: "MacBookPro" },
+      { serverId: "srv_a", label: "devbox", connection: { type: "directTcp" as const, endpoint: "a:6767" } },
+    ],
+    { localServerId: "srv_local" },
+  );
+  assert.deepEqual(result, { synced: 1, changed: true });
+  assert.equal(readName(), "MacBookPro");
+});
+
+test("clears the persisted local name when the mirror drops the local profile", async () => {
+  const home = mkdtempSync(join(tmpdir(), "paseo-kanban-local-name-clear-"));
+  process.env.PASEO_HOME = home;
+  const { writeAppHosts: writeFresh, readLocalHostName: readName } = await import(
+    `./app-hosts?test=${Date.now()}clear`
+  );
+  writeFresh([{ serverId: "srv_local", label: "MacBookPro" }], { localServerId: "srv_local" });
+  assert.equal(readName(), "MacBookPro");
+  const result = writeFresh([], { localServerId: "srv_local" });
+  assert.equal(result.changed, true);
+  assert.equal(readName(), null);
+});
+
 test("readAppHosts tolerates a corrupt mirror file", async () => {
   const home = mkdtempSync(join(tmpdir(), "paseo-kanban-app-hosts-corrupt-"));
   process.env.PASEO_HOME = home;

@@ -1,15 +1,16 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { dirname, join } from "node:path";
 import {
-  createPaseoClient,
+  createPaseoApi,
   type PaseoAgent,
   type PaseoApi,
   type PaseoClient,
   type PaseoClientConfig,
   type PaseoWorkspace,
 } from "@getpaseo/client";
+import { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import {
   DEFAULT_RELAY_ENDPOINT,
   buildDaemonWebSocketUrl,
@@ -33,14 +34,41 @@ const HOST_CACHE_FILE = join(paseoHome(), "plugin-data", "paseo-kanban", "snapsh
 function localHostName(): string {
   return readLocalHostName() ?? hostname();
 }
+
+let cachedServerId: string | null | undefined;
+/** The local daemon's own server id, used to drop mirrored connections that loop back to it. */
+function localServerId(): string | null {
+  if (cachedServerId !== undefined) return cachedServerId;
+  try {
+    const value = readFileSync(join(paseoHome(), "server-id"), "utf8").trim();
+    cachedServerId = value.length > 0 ? value : null;
+  } catch {
+    cachedServerId = null;
+  }
+  return cachedServerId;
+}
 let generation = 0;
 let cached: { at: number; value: KanbanSnapshot } | null = null;
 let inflight: { generation: number; promise: Promise<KanbanSnapshot> } | null = null;
-const clients = new Map<string, { host: string; client: PaseoClient; serverId: string | null }>();
+const clients = new Map<string, { host: string; client: KanbanRemoteClient; serverId: string | null }>();
 
 type KanbanSnapshot = { refreshedAt: string; hosts: KanbanHost[] };
 type ClientTarget = { config: PaseoClientConfig; serverId: string | null };
 type CachedHost = { fingerprint: string; host: KanbanHost };
+type KanbanRemoteClient = PaseoClient & Pick<DaemonClient, "getDaemonStatus">;
+
+/** Same wiring as createPaseoClient, but keeps the DaemonClient reachable for status lookups. */
+function createRemoteClient(config: PaseoClientConfig): KanbanRemoteClient {
+  const daemonClient = new DaemonClient({ ...config, clientId: `paseo-kanban-${randomUUID()}`, clientType: "cli" });
+  return {
+    ...createPaseoApi(daemonClient),
+    connect: () => daemonClient.connect(),
+    close: () => daemonClient.close(),
+    ensureConnected: () => daemonClient.ensureConnected(),
+    getConnectionState: () => daemonClient.getConnectionState(),
+    getDaemonStatus: (options) => daemonClient.getDaemonStatus(options),
+  };
+}
 
 function readHostCache(): Map<string, CachedHost> {
   try {
@@ -203,7 +231,7 @@ async function inspectLocal(paseo: PaseoApi): Promise<KanbanHost> {
   }
 }
 
-async function remoteClient(config: KanbanHostConfig): Promise<{ client: PaseoClient; serverId: string | null }> {
+async function remoteClient(config: KanbanHostConfig): Promise<{ client: KanbanRemoteClient; serverId: string | null }> {
   const existing = clients.get(config.name);
   if (existing?.host === config.host) {
     await existing.client.connect();
@@ -211,10 +239,20 @@ async function remoteClient(config: KanbanHostConfig): Promise<{ client: PaseoCl
   }
   if (existing) await existing.client.close();
   const target = clientTarget(config.host);
-  const client = createPaseoClient(target.config);
+  const client = createRemoteClient(target.config);
   const entry = { host: config.host, client, serverId: target.serverId };
   clients.set(config.name, entry);
   await client.connect();
+  if (!entry.serverId) {
+    // Direct TCP targets carry no server id in the connection string; ask the daemon itself.
+    // Best-effort: older daemons or permission failures leave it null.
+    try {
+      const status = await client.getDaemonStatus();
+      entry.serverId = typeof status.serverId === "string" && status.serverId.length > 0 ? status.serverId : null;
+    } catch {
+      // Self-detection and remote navigation degrade, inventory still works.
+    }
+  }
   return entry;
 }
 
@@ -267,7 +305,7 @@ export async function archiveAgent(paseo: PaseoApi, hostId: string, agentId: str
   return result;
 }
 
-async function inspectRemote(config: KanbanHostConfig): Promise<KanbanHost> {
+async function inspectRemote(config: KanbanHostConfig): Promise<KanbanHost | null> {
   const fingerprint = hostFingerprint(config.host);
   try {
     const result = await withDeadline((async () => {
@@ -275,6 +313,15 @@ async function inspectRemote(config: KanbanHostConfig): Promise<KanbanHost> {
       const { agents, workspaces } = await inventory(entry.client);
       return { entry, agents, workspaces };
     })(), `${config.name} inventory`);
+    const self = localServerId();
+    if (self && result.entry.serverId === self) {
+      // The app registry mirrored a loopback endpoint (e.g. localhost:6767) that resolves to
+      // this daemon: drop the duplicate instead of listing the local sessions twice.
+      clients.delete(config.name);
+      void result.entry.client.close();
+      lastSuccessful.delete(config.name);
+      return null;
+    }
     const host = {
       id: config.name,
       name: config.name,
@@ -337,7 +384,9 @@ export function getSnapshot(paseo: PaseoApi, refresh = false): Promise<KanbanSna
     const remotes = allRemoteConfigs();
     await closeRemovedClients(remotes);
     // ponytail: bounded 21-host fanout; add a worker pool if larger fleets become real.
-    const hosts = await Promise.all([inspectLocal(paseo), ...remotes.map(inspectRemote)]);
+    const hosts = (await Promise.all([inspectLocal(paseo), ...remotes.map(inspectRemote)])).filter(
+      (host): host is KanbanHost => host !== null,
+    );
     writeHostCache();
     const value = { refreshedAt: new Date().toISOString(), hosts };
     if (generation === startedAtGeneration) cached = { at: Date.now(), value };

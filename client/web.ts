@@ -24,6 +24,16 @@ function readString(value: unknown, max: number): string | null {
   return trimmed.length > 0 && trimmed.length <= max ? trimmed : null;
 }
 
+function isLoopbackEndpoint(endpoint: string): boolean {
+  const host = (endpoint.startsWith("[") ? endpoint.slice(1).split("]")[0] : endpoint.split(":")[0])?.toLowerCase() ?? "";
+  return host === "localhost" || host === "::1" || host.startsWith("127.");
+}
+
+/**
+ * Pick the connection most likely to work from the daemon hosting the plugin, not from the
+ * machine the app runs on: routable direct TCP first, then relay, with loopback TCP last
+ * (loopback only helps when app and daemon share a machine).
+ */
 function readConnection(profile: Record<string, unknown>): AppHostConnection | null {
   const connections = Array.isArray(profile.connections) ? profile.connections : [];
   const preferredId = readString(profile.preferredConnectionId, 200);
@@ -34,6 +44,7 @@ function readConnection(profile: Record<string, unknown>): AppHostConnection | n
         return (aId === preferredId ? -1 : 0) - (bId === preferredId ? -1 : 0);
       })
     : connections;
+  const usable: AppHostConnection[] = [];
   for (const candidate of candidates) {
     if (!candidate || typeof candidate !== "object") continue;
     const connection = candidate as Record<string, unknown>;
@@ -41,28 +52,30 @@ function readConnection(profile: Record<string, unknown>): AppHostConnection | n
       const endpoint = readString(connection.endpoint, 500);
       if (!endpoint) continue;
       const password = readString(connection.password, 500);
-      return {
+      usable.push({
         type: "directTcp",
         endpoint,
         ...(typeof connection.useTls === "boolean" ? { useTls: connection.useTls } : {}),
         ...(password ? { password } : {}),
-      };
+      });
+      continue;
     }
     if (connection.type === "relay") {
       const relayEndpoint = readString(connection.relayEndpoint, 500);
       const daemonPublicKeyB64 = readString(connection.daemonPublicKeyB64, 500);
       if (!relayEndpoint || !daemonPublicKeyB64) continue;
-      return {
+      usable.push({
         type: "relay",
         relayEndpoint,
         ...(typeof connection.useTls === "boolean" ? { useTls: connection.useTls } : {}),
         daemonPublicKeyB64,
-      };
+      });
     }
     // remoteSsh / directSocket / directPipe connections are tunneled by the app itself;
     // the plugin cannot reproduce them daemon-side, so those hosts are skipped.
   }
-  return null;
+  const routableTcp = usable.find((connection) => connection.type === "directTcp" && !isLoopbackEndpoint(connection.endpoint));
+  return routableTcp ?? usable.find((connection) => connection.type === "relay") ?? usable[0] ?? null;
 }
 
 export function readAppHostRegistry(): AppHostSyncEntry[] {

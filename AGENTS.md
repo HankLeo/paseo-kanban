@@ -47,7 +47,7 @@ client/                    # app 内运行（仅 React Native API）
 3. **主题**：所有颜色必须取自 `theme.colors`（11 个 token），样式用 `useMemo(() => createStyles(theme, compact), [theme, compact])` 重建；theme 未覆盖的状态色走 `shared/colors.ts` 的镜像调色板（按 `themeScheme` 明暗取值）。禁止硬编码颜色（identity 调色板除外）。
 4. **布局**：`layout.compact` 为 true 时必须有合理的紧凑形态（泳道退化分节纵列、工具栏图标化）。
 5. **zod 契约**：所有 RPC 输入输出在 `shared/contracts.ts` 定义，两端校验；改契约需同步 handler 与调用点。
-6. **提交纪律**：在任何代码修改前先创建 feature 分支（`git checkout -b feature/<描述>`），严禁直接提交/推送到 main。
+6. **提交纪律**：在任何代码修改前先创建 feature 分支（`git checkout -b feature/<描述>`）；改动完成后按「Worktree 工作流」合并回源仓库 main 并推送，除此之外严禁直接提交/推送到 main。
 
 ## 关键设计（改之前先理解）
 
@@ -77,16 +77,26 @@ paseo plugin logs paseo-kanban     # daemon 侧日志
 paseo plugin ls            # 确认 running 无 error
 ```
 
+## Worktree 工作流
+
+本仓库通常在 paseo 创建的 worktree（`~/.paseo/worktrees/<id>/<name>`）中迭代，源仓库位于 `/Users/liuhao/Project/AI/Agents/paseo-kanban`（同时是插件的 directory 安装目录）：
+
+1. 改动在 worktree 的 feature 分支上完成、通过全部验证后提交。
+2. 到源仓库把 feature 分支合并进 `main` 并 `git push` 到远端，保证源目录始终最新。
+3. 在**源仓库目录**执行 `paseo plugin reload paseo-kanban` 让 daemon 加载新代码——在 worktree 里 reload 无效（daemon 加载的是安装目录的代码）。
+
 ## 验证要求（UI 改动必做）
 
 1. `npm run typecheck && npm test` + 上面的移动端审计 grep。
 2. `paseo plugin reload paseo-kanban` 且 `paseo plugin ls` 为 running。
 3. 浏览器实测：用 Tabbit（`~/.local/bin/tabbit-cli`）打开 `https://app.paseo.sh`（已连本机 daemon）或直接访问看板 URL：
    `https://app.paseo.sh/h/<serverId>/plugin/paseo-kanban/sidebar/kanban?pluginId=paseo-kanban&contributionKind=sidebar&contributionId=kanban`
-   端到端点击验证改动点 + 截图确认渲染 + 检查相邻功能无回归；主题切换（Settings→外观）后颜色仍正确；窄视口 compact 正常。
+   端到端点击验证改动点 + 截图确认渲染 + 检查相邻功能无回归；主题切换（Settings→外观）后颜色仍正确；窄视口 compact 正常。桌面 app 无法被 agent 直接操作，浏览器验证一律走 web 端。
 4. 不要在用户的真实数据上测破坏性操作（归档、改名）；标记未读可用 marks.json 落盘核对。
 
 ## 参考依赖（相对本仓库的路径）
+
+> 注意：在 worktree 中工作时，`../paseo`、`../paseo-fleet-dashboard` 并不存在——参考仓库位于原仓库位置，即源仓库旁边的 `/Users/liuhao/Project/AI/Agents/paseo` 与 `/Users/liuhao/Project/AI/Agents/paseo-fleet-dashboard`。
 
 - **`../paseo`**（paseo 源仓库，API 事实来源）：
   - 插件客户端 API 类型：`packages/plugin/src/client/contracts.ts`（addSurface/addWorkspacePanel/openPanel/导航/SettingsState）

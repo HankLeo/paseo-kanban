@@ -54,7 +54,8 @@ client/                    # app 内运行（仅 React Native API）
 - **数据流**：客户端 TanStack Query（30s 轮询）→ RPC `snapshot.get` → server 端本地用注入的 `paseo`、远程用持久 `PaseoClient`（最多 21 host 并发、12s 单 host 超时、失败 host 回退最近成功快照并标 `cached`）→ 返回原始 workspaces/agents/marks → **客户端**用 `buildSessionCards` 纯函数装配卡片（过滤/排序/lane/甘特都在客户端做）。
 - **session 粒度**：根 agent 为卡片，子 agent 经 `labels["paseo.parent-agent-id"]` 归组嵌在父卡片内；archived agent / archiving workspace 直接过滤。
 - **未读标记**：插件私有（server 端 marks.json，0600），idle + 有效 mark → 显示 unread；打开会话时自动清除。**paseo 未开放设置原生未读的 API，无法同步到 app 侧边栏绿点**（已确认 `PaseoAgentHandle` 无此方法）。
-- **远程 host 双来源**：手动 `hosts.json`（Add host）+ 自动镜像 `app-hosts.json`（客户端经 `client/web.ts` 读 app 注册表 `@paseo:daemon-registry`，随快照周期全量同步；仅支持 directTcp/relay，SSH 隧道类 app 专有连接跳过；同名时手动优先；`localServerId` 排除本机）。
+- **远程 host 双来源**：手动 `hosts.json`（Add host）+ 自动镜像 `app-hosts.json`（客户端经 `client/web.ts` 读 app 注册表 `@paseo:daemon-registry`，随快照周期同步；镜像**按 app 实例分区**——`client/web.ts` 在 localStorage 生成稳定 `appId`，每次同步只替换自己分区，多台机器的 app 互不覆盖，同一 daemon 由先镜像的 app 持有；仅支持 directTcp/relay，SSH 隧道类 app 专有连接跳过；同名时手动优先；`localServerId` 排除本机）。
+- **多 daemon 装同一插件**：app 0.8 按 `插件id/贡献id` 合并侧边栏贡献为单条目，渲染时优先「当前 host 的实例」（`packages/app/src/plugins/sidebar-items.tsx` 的 `selectTarget`），多实例时面板头部有 host 切换器（会话级记忆）。插件侧无法影响该选择；防冲突手段是镜像分区（见上一条）。
 - **点击行为**：`navigation.openAgent({agentId})` 跳转 reveal 聊天页 + `navigation-bus` 调 `client.openPanel("session-detail", {workspaceId, agentId, location:"explorer"})` 展开侧边栏详情面板；远程 host 降级为 `paseo agent open --server` CLI（需要 host 带 serverId，relay 天然有、directTcp 由 app 镜像注入）。
 - **视图偏好**：`useSettings(boardPreferences)`（host 作用域持久化），未 ready 时用默认值。
 

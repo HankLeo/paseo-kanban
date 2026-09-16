@@ -6,14 +6,19 @@ import { paseoHome } from "./paseo-home";
 
 /**
  * Hosts mirrored from the Paseo app's own registry via the client bundle. Kept separate from the
- * manually managed hosts.json: this file is fully replaced on every sync and the app registry is
- * the source of truth. Contains connection material, so it is written owner-only like hosts.json.
+ * manually managed hosts.json: each syncing app instance owns one partition and replaces only its
+ * own records (see mergeAppHostRecords), so several machines' apps coexist. Contains connection
+ * material, so it is written owner-only like hosts.json.
  */
 
 export interface AppHostRecord {
+  /** Owning app instance (storage-scoped id); "" marks records from pre-partition plugin versions. */
+  appId: string;
   name: string;
   host: string;
   serverId: string;
+  /** ISO time of the last sync that changed this record; informational, kept stable while unchanged. */
+  syncedAt: string;
 }
 
 export interface AppHostSyncInputEntry {
@@ -52,8 +57,10 @@ function sanitizeName(label: string | undefined, serverId: string): string {
 
 export function toAppHostRecords(
   entries: readonly AppHostSyncInputEntry[],
-  options: { localServerId?: string; reservedNames?: ReadonlySet<string> } = {},
+  options: { appId?: string; localServerId?: string; reservedNames?: ReadonlySet<string>; now?: string } = {},
 ): AppHostRecord[] {
+  const appId = options.appId ?? "";
+  const syncedAt = options.now ?? new Date().toISOString();
   const reserved = new Set(options.reservedNames ?? []);
   const used = new Set<string>(reserved);
   const records: AppHostRecord[] = [];
@@ -68,12 +75,62 @@ export function toAppHostRecords(
     if (used.has(name)) continue;
     used.add(name);
     records.push({
+      appId,
       name,
       host: appHostConnectionString(entry.connection, entry.serverId),
       serverId: entry.serverId,
+      syncedAt,
     });
   }
   return records;
+}
+
+/**
+ * One app instance only replaces the partition it owns, so several machines mirroring their own
+ * registries into the same daemon coexist instead of clobbering each other. When two apps mirror
+ * the same daemon, the current owner's record stays stable until that owner stops listing it.
+ * Records without an appId come from pre-partition versions and are dropped by the first
+ * partitioned sync.
+ */
+export function mergeAppHostRecords(
+  previous: readonly AppHostRecord[],
+  incoming: readonly AppHostRecord[],
+  appId: string,
+  reservedNames: ReadonlySet<string>,
+): AppHostRecord[] {
+  const kept = appId
+    ? previous.filter((record) => record.appId !== "" && record.appId !== appId)
+    : previous.filter((record) => record.appId === "");
+  const byServerId = new Map(kept.map((record) => [record.serverId, record]));
+  const ownPrevious = new Map(
+    previous.filter((record) => record.appId === appId).map((record) => [record.serverId, record] as const),
+  );
+  for (const record of incoming) {
+    if (byServerId.has(record.serverId)) continue;
+    // Keep the stored timestamp while the connection is unchanged so idle syncs stay no-ops.
+    const unchanged = ownPrevious.get(record.serverId);
+    byServerId.set(
+      record.serverId,
+      unchanged && unchanged.host === record.host ? { ...record, syncedAt: unchanged.syncedAt } : record,
+    );
+  }
+  return dedupeNames([...byServerId.values()], reservedNames);
+}
+
+function dedupeNames(records: readonly AppHostRecord[], reservedNames: ReadonlySet<string>): AppHostRecord[] {
+  const used = new Set<string>(reservedNames);
+  const result: AppHostRecord[] = [];
+  for (const record of [...records].sort((a, b) => a.serverId.localeCompare(b.serverId))) {
+    let name = record.name;
+    if (used.has(name)) {
+      const suffix = createHash("sha256").update(record.serverId).digest("hex").slice(0, 6);
+      name = `${record.name.slice(0, 60)}-${suffix}`;
+    }
+    if (used.has(name)) continue;
+    used.add(name);
+    result.push(name === record.name ? record : { ...record, name });
+  }
+  return result.slice(0, MAX_HOSTS);
 }
 
 export function readAppHosts(): AppHostRecord[] {
@@ -83,9 +140,15 @@ export function readAppHosts(): AppHostRecord[] {
     const records: AppHostRecord[] = [];
     for (const candidate of value) {
       if (!candidate || typeof candidate !== "object") continue;
-      const record = candidate as { name?: unknown; host?: unknown; serverId?: unknown };
+      const record = candidate as { appId?: unknown; name?: unknown; host?: unknown; serverId?: unknown; syncedAt?: unknown };
       if (typeof record.name === "string" && typeof record.host === "string" && typeof record.serverId === "string") {
-        records.push({ name: record.name, host: record.host, serverId: record.serverId });
+        records.push({
+          appId: typeof record.appId === "string" ? record.appId : "",
+          name: record.name,
+          host: record.host,
+          serverId: record.serverId,
+          syncedAt: typeof record.syncedAt === "string" ? record.syncedAt : "",
+        });
       }
     }
     return records;
@@ -134,13 +197,18 @@ export function readLocalHostName(): string | null {
   }
 }
 
-/** Replace the mirror; returns how many hosts landed and whether the file changed. */
+/**
+ * Merge this app's partition into the mirror. Each syncing app owns one partition, so a board
+ * viewed from another machine's app never drops the hosts this machine's app mirrored.
+ */
 export function writeAppHosts(
   entries: readonly AppHostSyncInputEntry[],
-  options: { localServerId?: string; reservedNames?: ReadonlySet<string> } = {},
+  options: { appId?: string; localServerId?: string; reservedNames?: ReadonlySet<string> } = {},
 ): { synced: number; changed: boolean } {
   const localNameChanged = writeLocalHostName(entries, options.localServerId);
-  const records = toAppHostRecords(entries, options);
+  const appId = options.appId ?? "";
+  const incoming = toAppHostRecords(entries, options);
+  const records = mergeAppHostRecords(readAppHosts(), incoming, appId, options.reservedNames ?? new Set());
   const serialized = `${JSON.stringify(records, null, 2)}\n`;
   let previous = "";
   try {

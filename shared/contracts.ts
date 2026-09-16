@@ -115,11 +115,14 @@ export type AppHostConnection = z.infer<typeof AppHostConnectionSchema>;
 /**
  * The client mirrors the Paseo app's own host registry (read from app storage on web/desktop)
  * so daemons the user already added in the app appear on the board without a second setup.
- * Full-replace semantics: whatever the app registry holds right now wins.
+ * Per-app partitions: each syncing app replaces only the hosts it knows, so several machines'
+ * apps mirroring into the same daemon coexist instead of clobbering each other.
  */
 export const syncAppHosts = defineRpc({
   name: "paseo-kanban.hosts.app.sync",
   input: z.object({
+    /** Storage-scoped app instance id; partitions the mirror so apps do not overwrite each other. */
+    appId: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/).optional(),
     localServerId: z.string().max(200).optional(),
     hosts: z
       .array(

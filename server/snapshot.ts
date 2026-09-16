@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { dirname, join } from "node:path";
 import {
   createPaseoClient,
@@ -28,6 +29,7 @@ const COLLECTION_TIMEOUT_MS = 12_000;
 const CACHE_MS = 30_000;
 const MAX_PAGES = 50;
 const HOST_CACHE_FILE = join(paseoHome(), "plugin-data", "paseo-kanban", "snapshot.json");
+const LOCAL_HOST_NAME = hostname();
 let generation = 0;
 let cached: { at: number; value: KanbanSnapshot } | null = null;
 let inflight: { generation: number; promise: Promise<KanbanSnapshot> } | null = null;
@@ -190,11 +192,11 @@ async function inspectLocal(paseo: PaseoApi): Promise<KanbanHost> {
   const fingerprint = hostFingerprint();
   try {
     const { agents, workspaces } = await withDeadline(inventory(paseo), "Local inventory");
-    const host = { id: "local", name: "This host", serverId: null, reachable: true, error: null, agents, workspaces };
+    const host = { id: "local", name: LOCAL_HOST_NAME, serverId: null, reachable: true, error: null, agents, workspaces };
     lastSuccessful.set(host.id, { fingerprint, host });
     return host;
   } catch (cause) {
-    return failedHost("local", "This host", cause, undefined, fingerprint);
+    return failedHost("local", LOCAL_HOST_NAME, cause, undefined, fingerprint);
   }
 }
 

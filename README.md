@@ -24,7 +24,7 @@ paseo plugin install "$PWD"
 
 ## 点击行为
 
-- **点卡片 / 甘特条 / 子会话条目**：本机会话 → 跳转打开该会话（`navigation.openAgent`），并**展开 explorer 侧边栏**显示 Session detail 面板（会话与所属 workspace 的实时信息、改名/归档操作）；远程会话 → 通过 `paseo agent open --server` 在桌面端打开。
+- **点卡片 / 甘特条 / 子会话条目**：本机会话 → 跳转打开该会话（`navigation.openAgent`）；远程会话 → 通过 `paseo agent open --server` 在桌面端打开。
 - **点卡片上的 workspace 名**：跳转到该 workspace 页面。
 - 子 agent 会话嵌在父卡片内，可独立点击直达。
 
@@ -36,7 +36,7 @@ paseo plugin install "$PWD"
   - 两个来源独立存储（app-hosts.json 按 app 实例分区合并，见下节；hosts.json 为手动管理），手动条目在重名时优先。
 - host、agent provider（All providers / Claude / Codex …，按快照中真实存在的 provider 生成）与 5 种会话状态的过滤。
 - 会话快捷操作：打开、归档（进行中/等待确认的会先确认）、标记/取消未读。**未读标记为插件私有**（存于 marks.json，打开会话时自动清除），paseo 未开放设置原生未读/attention 的 API，因此不会同步到 paseo 侧边栏的绿点。
-- workspace 操作：内联改名、归档（列表视图节头与详情面板内均有入口）。
+- workspace 操作：内联改名、归档（列表视图节头有入口）。
 - 离线容错：host 不可达时展示最近一次成功快照并标记 `cached`，不阻塞其他 host。
 - 主题跟随：全部颜色取自 `theme.colors`，随 Paseo 主题（含自定义主题）实时更新；明暗方案从背景亮度推导。
 - 移动端适配：仅使用 React Native 组件，compact 布局下泳道与甘特自动退化。
@@ -70,7 +70,6 @@ $PASEO_HOME/plugin-data/paseo-kanban/marks.json      # 会话未读标记
 - Paseo 不暴露会话的历史状态流转，甘特条表示**生命期**而非状态迁移。
 - 看板为只读 + 快捷操作，不支持拖拽改状态（状态是从实时数据派生的）。
 - 远程 host 的「展开侧边栏定位」不可用（app 侧边栏只连本机 daemon），远程会话跳转走 CLI 打开。
-- Session detail 面板依赖当前版本的插件面板 API：桌面 app 0.8.0 可用；旧版托管 web app（app.paseo.sh）构建较老，面板不会展开（不影响跳转与看板本体）。
 
 ## 来源
 

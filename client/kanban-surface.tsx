@@ -31,7 +31,6 @@ import {
   type SessionCard,
 } from "../shared/session-model";
 import { FilterBar } from "./components/filter-bar";
-import { openSessionDetail } from "./navigation-bus";
 import { kanbanAppInstanceId, readAppHostRegistry } from "./web";
 import { GanttView } from "./views/gantt-view";
 import { ListView } from "./views/list-view";
@@ -219,13 +218,6 @@ export function KanbanSurface({ theme, layout, navigation, host }: PluginSurface
     async (host: KanbanHost, card: SessionCard, agentId?: string) => {
       const targetAgentId = agentId ?? card.id;
       if (host.id === "local") {
-        // Expand the sidebar panel first so a failure never blocks the conversation jump;
-        // the agent reveal runs last and keeps final focus.
-        try {
-          openSessionDetail({ workspaceId: card.workspaceId, agentId: targetAgentId });
-        } catch (cause) {
-          toast.error(cause instanceof Error ? cause.message : "Could not open session detail.");
-        }
         navigation?.openAgent({ agentId: targetAgentId });
         if (card.unreadMarkedAt && !agentId) {
           toggleUnread.mutate({ agentId: card.id, marked: true });

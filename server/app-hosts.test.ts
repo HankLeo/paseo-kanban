@@ -144,18 +144,30 @@ test("refreshes the stored timestamp only when the mirrored connection changes",
   assert.equal(merged[0]?.syncedAt, "2026-09-16T10:00:00.000Z");
 });
 
-test("drops pre-partition records on the first partitioned sync", async () => {
+test("claims pre-partition records it lists and keeps unclaimed ones", async () => {
   const home = mkdtempSync(join(tmpdir(), "paseo-kanban-app-hosts-legacy-"));
   process.env.PASEO_HOME = home;
   const { writeAppHosts: writeFresh, readAppHosts: readFresh } = await import(
     `./app-hosts?test=${Date.now()}legacy`
   );
   writeFresh([{ serverId: "srv_old", label: "old", connection: { type: "directTcp" as const, endpoint: "old:6767" } }], {});
+  // An app whose registry knows nothing about the legacy host keeps it instead of wiping it.
   writeFresh([{ serverId: "srv_new", label: "new", connection: { type: "directTcp" as const, endpoint: "new:6767" } }], {
     appId: "app-a",
   });
-  const names = readFresh().map((record: { name: string }) => record.name);
-  assert.deepEqual(names, ["new"]);
+  let records = readFresh();
+  assert.deepEqual(records.map((record: { name: string }) => record.name).sort(), ["new", "old"]);
+  // An app that lists the legacy daemon claims it into its own partition.
+  writeFresh([{ serverId: "srv_old", label: "old", connection: { type: "directTcp" as const, endpoint: "old:6767" } }], {
+    appId: "app-b",
+  });
+  records = readFresh();
+  assert.deepEqual(records.map((record: { name: string }) => record.name).sort(), ["new", "old"]);
+  assert.equal(records.find((record: { serverId: string }) => record.serverId === "srv_old")?.appId, "app-b");
+  // The claiming app can then remove it; other partitions are untouched.
+  writeFresh([], { appId: "app-b" });
+  records = readFresh();
+  assert.deepEqual(records.map((record: { name: string }) => record.name), ["new"]);
 });
 
 test("skips entries without a reproducible connection but keeps their local label", async () => {

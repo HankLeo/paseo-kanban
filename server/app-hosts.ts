@@ -89,8 +89,8 @@ export function toAppHostRecords(
  * One app instance only replaces the partition it owns, so several machines mirroring their own
  * registries into the same daemon coexist instead of clobbering each other. When two apps mirror
  * the same daemon, the current owner's record stays stable until that owner stops listing it.
- * Records without an appId come from pre-partition versions and are dropped by the first
- * partitioned sync.
+ * Pre-partition records (no appId) are kept until some app lists the same daemon and claims them,
+ * so an app whose registry knows fewer hosts never wipes the mirror during migration.
  */
 export function mergeAppHostRecords(
   previous: readonly AppHostRecord[],
@@ -99,14 +99,16 @@ export function mergeAppHostRecords(
   reservedNames: ReadonlySet<string>,
 ): AppHostRecord[] {
   const kept = appId
-    ? previous.filter((record) => record.appId !== "" && record.appId !== appId)
+    ? previous.filter((record) => record.appId !== appId)
     : previous.filter((record) => record.appId === "");
   const byServerId = new Map(kept.map((record) => [record.serverId, record]));
   const ownPrevious = new Map(
     previous.filter((record) => record.appId === appId).map((record) => [record.serverId, record] as const),
   );
   for (const record of incoming) {
-    if (byServerId.has(record.serverId)) continue;
+    // Another app's partition owns this daemon; only a pre-partition record yields to anyone.
+    const existing = byServerId.get(record.serverId);
+    if (existing && existing.appId !== "") continue;
     // Keep the stored timestamp while the connection is unchanged so idle syncs stay no-ops.
     const unchanged = ownPrevious.get(record.serverId);
     byServerId.set(
